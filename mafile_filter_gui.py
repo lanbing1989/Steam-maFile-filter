@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import shutil
 import tkinter as tk
@@ -32,20 +33,31 @@ def parse_accounts(input_str):
 
 def filter_mafiles_by_account(src_dir, accounts, output_func):
     matched_files = []
+    failed_files = 0
+    matched_accounts = set()
+    already_matched = set()
+    # 只允许“纯账号名.扩展名”格式，不允许带括号(1)等
     for root, dirs, files in os.walk(src_dir):
         for file in files:
             if is_mafile(file):
+                # 正则匹配标准账号文件名（不含括号）
+                m = re.match(r"^([a-zA-Z0-9]+)\.(maFile|json)$", file)
+                if not m:
+                    continue  # 跳过带(1)等变体的
                 filepath = os.path.join(root, file)
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                     acc_name = str(data.get('account_name', '')).strip()
-                    if acc_name in accounts:
+                    if acc_name in accounts and acc_name not in already_matched:
                         matched_files.append((filepath, file))
+                        matched_accounts.add(acc_name)
+                        already_matched.add(acc_name)
                         output_func(f"[√] 匹配成功: {file}\n")
                 except Exception as e:
+                    failed_files += 1
                     output_func(f"[!] 跳过无法解析的文件: {file} 错误: {e}\n")
-    return matched_files
+    return matched_files, failed_files, matched_accounts
 
 class MafileSelectorApp:
     def __init__(self, master):
@@ -57,7 +69,6 @@ class MafileSelectorApp:
         self.setup_ui()
 
     def setup_ui(self):
-        # 主frame
         main_frame = tk.Frame(self.master)
         main_frame.pack(fill="both", expand=True)
 
@@ -94,7 +105,7 @@ class MafileSelectorApp:
         self.output_text = scrolledtext.ScrolledText(output_frame, width=100, height=10, font=("Consolas", 11))
         self.output_text.pack(fill="both", expand=True)
 
-        # 版权信息，独立在最底部，始终可见
+        # 版权信息
         copyright_frame = tk.Frame(self.master)
         copyright_frame.place(relx=0, rely=1, anchor='sw', relwidth=1)
         copyright_label = tk.Label(
@@ -136,10 +147,25 @@ class MafileSelectorApp:
             self.output_text.insert("end", msg)
             self.output_text.see("end")
 
-        matched_files = filter_mafiles_by_account(src, accounts, output_func)
+        matched_files, failed_files, matched_accounts = filter_mafiles_by_account(src, accounts, output_func)
+
+        # 输出未匹配账号列表
+        unmatched_accounts = accounts - matched_accounts
+        if unmatched_accounts:
+            self.output_text.insert("end", "\n未匹配成功的账号列表：\n")
+            for acc in sorted(unmatched_accounts):
+                self.output_text.insert("end", f"  {acc}\n")
+            self.output_text.insert("end", "\n未匹配成功的账号可能原因：\n")
+            self.output_text.insert("end", "1. 该账号没有对应的maFile文件；\n")
+            self.output_text.insert("end", "2. maFile文件损坏或无法解析；\n")
+            self.output_text.insert("end", "3. 账号字段填写有误。\n")
+
         if not matched_files:
-            self.output_text.insert("end", "未找到匹配的maFile文件。\n")
-            messagebox.showinfo("结果", "未找到匹配的maFile文件。")
+            self.output_text.insert("end", "\n未找到匹配的maFile文件。\n")
+            msg = "未找到匹配的maFile文件。"
+            if failed_files > 0:
+                msg += f"\n并有 {failed_files} 个文件解析失败，详情请见日志。"
+            messagebox.showinfo("结果", msg)
             return
 
         nowstr = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -154,7 +180,10 @@ class MafileSelectorApp:
 
         dst_display = dst_dir.replace('\\', '/')
         self.output_text.insert("end", f"\n筛选完成，共复制 {len(matched_files)} 个maFile文件到 {dst_display}\n")
-        if messagebox.askyesno("完成", f"筛选完成，共复制 {len(matched_files)} 个maFile文件到:\n{dst_display}\n\n是否打开目标文件夹？"):
+        msg = f"筛选完成，共复制 {len(matched_files)} 个maFile文件到:\n{dst_display}"
+        if failed_files > 0:
+            msg += f"\n\n有 {failed_files} 个文件解析失败，详情请见日志。"
+        if messagebox.askyesno("完成", msg + "\n\n是否打开目标文件夹？"):
             os.startfile(dst_dir)
 
 if __name__ == '__main__':
